@@ -544,23 +544,54 @@ async def bet_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 # Admin force outcome handler
 async def admin_force_outcome_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id not in ADMIN_IDS:
-        await update.message.reply_text("Chỉ admin.")
-        return
-    text = update.message.text.strip().lower()
+    """Cho phép admin ép kết quả cho tất cả nhóm bằng cách nhắn riêng với bot."""
+    user = update.effective_user
     chat = update.effective_chat
-    if chat.type not in ("group","supergroup"):
-        await update.message.reply_text("Lệnh này chỉ dùng trong nhóm.")
+    text = update.message.text.strip().lower()
+
+    # --- Kiểm tra quyền ---
+    if user.id not in ADMIN_IDS:
+        await update.message.reply_text("❌ Bạn không có quyền sử dụng lệnh này.")
         return
-    if text.startswith("/nho"): val="small"
-    elif text.startswith("/lon"): val="big"
-    elif text.startswith("/chan"): val="even"
-    elif text.startswith("/le"): val="odd"
+
+    # --- Lệnh chỉ dùng trong chat riêng với bot ---
+    if chat.type != "private":
+        await update.message.reply_text("⚠️ Hãy nhắn lệnh này trong riêng với bot, không phải trong nhóm.")
+        return
+
+    # --- Xác định giá trị ép ---
+    if text.startswith("/nho"):
+        forced_val = "small"
+    elif text.startswith("/lon"):
+        forced_val = "big"
+    elif text.startswith("/chan"):
+        forced_val = "even"
+    elif text.startswith("/le"):
+        forced_val = "odd"
     else:
-        await update.message.reply_text("Lệnh không hợp lệ. Dùng /Nho, /Lon, /Chan, /Le")
+        await update.message.reply_text("⚠️ Lệnh không hợp lệ. Dùng: /Nho, /Lon, /Chan, /Le")
         return
-    db_execute("UPDATE groups SET forced_outcome=? WHERE chat_id=?", (val, chat.id))
-    await update.message.reply_text(f"✅ Đã ép kết quả cho phiên tiếp theo: {val}")
+
+    # --- Lấy danh sách tất cả nhóm ---
+    groups = db_query("SELECT chat_id, title FROM groups WHERE approved=1")
+    if not groups:
+        await update.message.reply_text("❌ Không có nhóm nào để ép kết quả.")
+        return
+
+    # --- Cập nhật ép kết quả cho từng nhóm ---
+    count = 0
+    for g in groups:
+        try:
+            db_execute("UPDATE groups SET forced_outcome=? WHERE chat_id=?", (forced_val, g["chat_id"]))
+            count += 1
+        except Exception as e:
+            logger.exception(f"Failed to force outcome for group {g['chat_id']}: {e}")
+
+    # --- Thông báo cho admin ---
+    await update.message.reply_text(
+        f"✅ Đã ép kết quả *{forced_val.upper()}* cho phiên kế tiếp của *{count}* nhóm.",
+        parse_mode="Markdown"
+    )
 
 def format_history_block(chat_id: int, limit: int = MAX_HISTORY) -> str:
     rows = db_query("SELECT round_index, digits, result_size, result_parity FROM history WHERE chat_id=? ORDER BY id DESC LIMIT ?", (chat_id, limit))
