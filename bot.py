@@ -1,4 +1,3 @@
-
 # bot.py — Quick Lottery (full)
 # See conversation for feature requirements.
 import os
