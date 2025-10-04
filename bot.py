@@ -646,6 +646,12 @@ async def run_round_for_group(app: Application, chat_id: int, round_epoch: int):
                 logger.info(f" - Paid user {uid}: bet={int(bet_amt):,} -> payout={int(payout):,}")
         except Exception:
             pass
+        # ✅ Mở lại chat sau khi công bố kết quả
+        try:
+            await asyncio.sleep(1)
+            await unlock_group_chat(app.bot, chat_id)
+        except Exception:
+            logger.exception("Failed to unlock group chat after result")
     except Exception as e:
         logger.exception(f"Exception in run_round_for_group: {e}")
         for aid in ADMIN_IDS:
