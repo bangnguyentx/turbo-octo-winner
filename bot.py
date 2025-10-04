@@ -712,8 +712,7 @@ async def run_round_for_group(app: Application, chat_id: int, round_epoch: int):
                     try:
                         db_execute("UPDATE pot SET amount = amount + ? WHERE id = 1", (house_share,))
                     except Exception:
-                        
-logger.exception("Failed adding house share")
+                        logger.exception("Failed adding house share")
                 ensure_user(uid, "", "")
                 # update user's balance and streaks
                 try:
