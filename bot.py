@@ -583,8 +583,14 @@ async def run_round_for_group(app: Application, chat_id: int, round_epoch: int):
                 win=True; payout=amt*WIN_MULTIPLIER
             elif btype=="parity" and ((bval=="even" and parity=="even") or (bval=="odd" and parity=="odd")):
                 win=True; payout=amt*WIN_MULTIPLIER
-            elif btype=="number" and isinstance(bval,str) and bval!="" and bval in digits_str:
-                ln=max(1,min(6,len(bval))); mult=NUMBER_MULTIPLIERS.get(ln,0); payout=amt*mult; win=True
+            elif btype == "number" and isinstance(bval, str) and bval != "":
+                ln = max(1, min(6, len(bval)))
+                # chỉ lấy đúng số cuối theo độ dài cược
+                tail = digits_str[-ln:]
+                if bval == tail:
+                    mult = NUMBER_MULTIPLIERS.get(ln, 0)
+                    payout = amt * mult
+                    win = True
             if win:
                 winners.append((b["id"], uid, payout, amt))
             else:
