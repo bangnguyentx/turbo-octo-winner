@@ -198,11 +198,66 @@ def get_pot_amount() -> float:
 def reset_pot():
     db_execute("UPDATE pot SET amount=? WHERE id=1", (0.0,))
 
+# =========================
+# 🌀 Dynamic Pattern Random (Cách 8+ có auto hoán đổi)
+# =========================
+
 def roll_one_digit() -> int:
     return random.randint(0, 9)
 
+BASE_PATTERNS = [
+    ("size", "small", 3),
+    ("parity", "even", 2),
+    ("random", None, 4),
+    ("size", "big", 3),
+    ("parity", "odd", 2),
+]
+
+current_patterns = BASE_PATTERNS.copy()
+pattern_index = 0
+pattern_count = 0
+round_counter = 0
+PATTERN_SWITCH_INTERVAL = random.randint(15, 25)
+
+def shuffle_patterns():
+    """Tạo bộ pattern mới ngẫu nhiên để đổi cầu."""
+    global current_patterns
+    base = BASE_PATTERNS.copy()
+    random.shuffle(base)
+    if random.random() < 0.5:
+        insert_pos = random.randint(1, len(base)-1)
+        base.insert(insert_pos, ("random", None, random.randint(3, 5)))
+    current_patterns = base
+    logger.info(f"[Pattern] 🔄 Đã đổi pattern: {current_patterns}")
+
 def roll_six_digits() -> List[int]:
-    return [roll_one_digit() for _ in range(6)]
+    """Random 6 số theo pattern cầu chuỗi + tự động đổi pattern sau X vòng."""
+    global pattern_index, pattern_count, round_counter, PATTERN_SWITCH_INTERVAL
+
+    round_counter += 1
+    if round_counter >= PATTERN_SWITCH_INTERVAL:
+        shuffle_patterns()
+        pattern_index = 0
+        pattern_count = 0
+        round_counter = 0
+        PATTERN_SWITCH_INTERVAL = random.randint(15, 25)
+
+    ptype, pval, plen = current_patterns[pattern_index]
+
+    if pattern_count < plen:
+        pattern_count += 1
+        if ptype == "random":
+            return [roll_one_digit() for _ in range(6)]
+        else:
+            while True:
+                digits = [roll_one_digit() for _ in range(6)]
+                size, parity = classify_by_last_digit(digits)
+                if (ptype == "size" and size == pval) or (ptype == "parity" and parity == pval):
+                    return digits
+    else:
+        pattern_index = (pattern_index + 1) % len(current_patterns)
+        pattern_count = 0
+        return roll_six_digits()
 
 def classify_by_last_digit(digits: List[int]) -> Tuple[str, str]:
     last = digits[-1]
