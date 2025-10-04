@@ -312,8 +312,8 @@ async def ruttien_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # -----------------------
 # Betting handler (group-only)
-# Accepts:
-/N<amt>, /L<amt>, /C<amt>, /Le<amt>, /S<digits> <amt>
+# Accepts: /N<amt>, /L<amt>, /C<amt>, /Le<amt>, /S<digits> <amt>
+# -----------------------
 # -----------------------
 async def bet_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
