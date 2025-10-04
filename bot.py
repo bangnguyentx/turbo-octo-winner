@@ -139,6 +139,14 @@ def init_db():
     conn.commit()
     conn.close()
 
+import random
+from typing import List, Tuple, Optional, Dict, Any
+from datetime import datetime
+
+# -----------------------
+# DB helpers
+# -----------------------
+
 def db_execute(query: str, params: Tuple = ()):
     conn = get_db_connection()
     cur = conn.cursor()
@@ -198,66 +206,66 @@ def get_pot_amount() -> float:
 def reset_pot():
     db_execute("UPDATE pot SET amount=? WHERE id=1", (0.0,))
 
-# =========================
-# 🌀 Dynamic Pattern Random (Cách 8+ có auto hoán đổi)
-# =========================
+# -----------------------
+# Hybrid Random Engine (Cách 10)
+# -----------------------
+
+# Trạng thái cầu
+_current_phase_type = None      # small, big, even, odd, noise
+_current_phase_left = 0         # số vòng còn lại
+_hybrid_bias = 0.6             # xác suất lệch ưu tiên một nhóm (60/40)
+
+def _pick_new_phase():
+    """Chọn một pattern ngắn ngẫu nhiên, kết hợp bias và cầu ngắn."""
+    global _current_phase_type, _current_phase_left
+
+    types = ["small", "big", "even", "odd"]
+    # Giảm xác suất lặp lại cầu cũ
+    if _current_phase_type in types:
+        types.remove(_current_phase_type)
+
+    # 60% chọn bias theo nhóm small/big, 40% chọn parity hoặc noise
+    if random.random() < _hybrid_bias:
+        _current_phase_type = random.choice(["small", "big"])
+    else:
+        _current_phase_type = random.choice(["even", "odd", "noise"])
+
+    _current_phase_left = random.randint(2, 4)  # cầu ngắn, tránh bệt
+    logger.info(f"[Hybrid] 🔄 New pattern: {_current_phase_type} ({_current_phase_left} rounds)")
 
 def roll_one_digit() -> int:
     return random.randint(0, 9)
 
-BASE_PATTERNS = [
-    ("size", "small", 3),
-    ("parity", "even", 2),
-    ("random", None, 4),
-    ("size", "big", 3),
-    ("parity", "odd", 2),
-]
-
-current_patterns = BASE_PATTERNS.copy()
-pattern_index = 0
-pattern_count = 0
-round_counter = 0
-PATTERN_SWITCH_INTERVAL = random.randint(15, 25)
-
-def shuffle_patterns():
-    """Tạo bộ pattern mới ngẫu nhiên để đổi cầu."""
-    global current_patterns
-    base = BASE_PATTERNS.copy()
-    random.shuffle(base)
-    if random.random() < 0.5:
-        insert_pos = random.randint(1, len(base)-1)
-        base.insert(insert_pos, ("random", None, random.randint(3, 5)))
-    current_patterns = base
-    logger.info(f"[Pattern] 🔄 Đã đổi pattern: {current_patterns}")
-
 def roll_six_digits() -> List[int]:
-    """Random 6 số theo pattern cầu chuỗi + tự động đổi pattern sau X vòng."""
-    global pattern_index, pattern_count, round_counter, PATTERN_SWITCH_INTERVAL
+    """Random 6 số theo phương pháp HYBRID (cách 10)."""
+    global _current_phase_left, _current_phase_type
 
-    round_counter += 1
-    if round_counter >= PATTERN_SWITCH_INTERVAL:
-        shuffle_patterns()
-        pattern_index = 0
-        pattern_count = 0
-        round_counter = 0
-        PATTERN_SWITCH_INTERVAL = random.randint(15, 25)
+    # Nếu hết phase thì chọn cầu mới
+    if _current_phase_left <= 0 or _current_phase_type is None:
+        _pick_new_phase()
 
-    ptype, pval, plen = current_patterns[pattern_index]
+    digits = [roll_one_digit() for _ in range(5)]
 
-    if pattern_count < plen:
-        pattern_count += 1
-        if ptype == "random":
-            return [roll_one_digit() for _ in range(6)]
-        else:
-            while True:
-                digits = [roll_one_digit() for _ in range(6)]
-                size, parity = classify_by_last_digit(digits)
-                if (ptype == "size" and size == pval) or (ptype == "parity" and parity == pval):
-                    return digits
+    # Tầng quyết định số cuối
+    if _current_phase_type == "small":
+        last = random.randint(0, 5)
+    elif _current_phase_type == "big":
+        last = random.randint(6, 9)
+    elif _current_phase_type == "even":
+        last = random.choice([0, 2, 4, 6, 8])
+    elif _current_phase_type == "odd":
+        last = random.choice([1, 3, 5, 7, 9])
     else:
-        pattern_index = (pattern_index + 1) % len(current_patterns)
-        pattern_count = 0
-        return roll_six_digits()
+        # noise — pha ngẫu nhiên xen kẽ
+        if random.random() < 0.5:
+            last = random.randint(0, 5)
+        else:
+            last = random.randint(6, 9)
+
+    digits.append(last)
+    _current_phase_left -= 1
+
+    return digits
 
 def classify_by_last_digit(digits: List[int]) -> Tuple[str, str]:
     last = digits[-1]
@@ -267,7 +275,6 @@ def classify_by_last_digit(digits: List[int]) -> Tuple[str, str]:
 
 def icons_for_result(size: str, parity: str) -> str:
     return f"{ICON_SMALL if size=='small' else ICON_BIG} {ICON_EVEN if parity=='even' else ICON_ODD}"
-
 MAIN_MENU = ReplyKeyboardMarkup(
     [
         [KeyboardButton("🎰 Quick Lottery")],
