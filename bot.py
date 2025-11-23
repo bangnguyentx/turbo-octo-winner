@@ -1330,6 +1330,128 @@ async def unlock_group_chat(bot, chat_id: int):
     except Exception as e:
         logger.warning(f"Không thể mở khóa chat {chat_id}: {e}")
 
+async def bet_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Xử lý tin nhắn đặt cược từ người chơi"""
+    try:
+        chat = update.effective_chat
+        if chat.type not in ("group", "supergroup"):
+            return
+            
+        # Kiểm tra nhóm có đang chạy không
+        rows = db_query("SELECT running, bet_mode FROM groups WHERE chat_id=?", (chat.id,))
+        if not rows or not rows[0]["running"]:
+            return
+
+        user = update.effective_user
+        ensure_user(user.id, user.username or "", user.first_name or "")
+        u = get_user(user.id)
+        if not u:
+            return
+
+        text = update.message.text.strip()
+        
+        # Xác định loại cược và số tiền
+        bet_type = None
+        bet_value = None
+        amount = 0
+        
+        # Xử lý các định dạng cược
+        if text.lower().startswith(('/n', 'n')) and len(text) > 2:
+            # Cược nhỏ: /N1000 hoặc N1000
+            bet_type = "size"
+            bet_value = "small"
+            try:
+                amount = int(text[2:].replace(',', '').replace('.', ''))
+            except ValueError:
+                return
+                
+        elif text.lower().startswith(('/l', 'l')) and len(text) > 2 and not text.lower().startswith(('/le', 'le')):
+            # Cược lớn: /L1000 hoặc L1000
+            bet_type = "size" 
+            bet_value = "big"
+            try:
+                amount = int(text[2:].replace(',', '').replace('.', ''))
+            except ValueError:
+                return
+                
+        elif text.lower().startswith(('/c', 'c')) and len(text) > 2:
+            # Cược chẵn: /C1000 hoặc C1000
+            bet_type = "parity"
+            bet_value = "even"
+            try:
+                amount = int(text[2:].replace(',', '').replace('.', ''))
+            except ValueError:
+                return
+                
+        elif text.lower().startswith(('/le', 'le')) and len(text) > 3:
+            # Cược lẻ: /Le1000 hoặc Le1000
+            bet_type = "parity"
+            bet_value = "odd"
+            try:
+                amount = int(text[3:].replace(',', '').replace('.', ''))
+            except ValueError:
+                return
+                
+        elif text.lower().startswith(('/s', 's')) and len(text) > 2:
+            # Cược số: /S12345 1000 hoặc S12345 1000
+            parts = text[2:].split()
+            if len(parts) >= 2:
+                bet_type = "number"
+                bet_value = parts[0]
+                try:
+                    amount = int(parts[1].replace(',', '').replace('.', ''))
+                except ValueError:
+                    return
+            else:
+                return
+        
+        # Kiểm tra số tiền hợp lệ
+        if amount < MIN_BET:
+            await update.message.reply_text(f"❌ Cược tối thiểu {MIN_BET:,}₫")
+            return
+            
+        if amount > (u["balance"] or 0):
+            await update.message.reply_text("❌ Số dư không đủ")
+            return
+            
+        # Lấy round hiện tại
+        now_ts = int(datetime.utcnow().timestamp())
+        round_epoch = now_ts // ROUND_SECONDS
+        round_id = f"{chat.id}_{round_epoch}"
+        
+        # Lưu cược vào database
+        db_execute(
+            "INSERT INTO bets(chat_id, round_id, user_id, bet_type, bet_value, amount, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (chat.id, round_id, user.id, bet_type, bet_value, amount, now_iso())
+        )
+        
+        # Trừ tiền
+        new_balance = (u["balance"] or 0) - amount
+        set_balance(user.id, new_balance)
+        
+        # Cập nhật tổng volume cược
+        db_execute(
+            "UPDATE users SET total_bet_volume=COALESCE(total_bet_volume,0)+? WHERE user_id=?",
+            (amount, user.id)
+        )
+        
+        # Thông báo đặt cược thành công
+        bet_type_names = {
+            "size": "NHỎ" if bet_value == "small" else "LỚN",
+            "parity": "CHẴN" if bet_value == "even" else "LẺ", 
+            "number": f"SỐ {bet_value}"
+        }
+        
+        await update.message.reply_text(
+            f"✅ ĐẶT CƯỢC THÀNH CÔNG!\n\n"
+            f"🎯 Loại: {bet_type_names.get(bet_type, bet_type)}\n"
+            f"💰 Tiền cược: {amount:,}₫\n"
+            f"💳 Số dư còn: {new_balance:,}₫\n"
+            f"⏰ Vòng: {round_epoch}"
+        )
+        
+    except Exception as e:
+        logger.exception(f"Error in bet_message_handler: {e}")
 # [Keep all other existing functions exactly as they were...]
 
 # -----------------------
@@ -1347,11 +1469,14 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, menu_text_handler))
     app.add_handler(CallbackQueryHandler(approve_callback_handler, pattern=r"^(approve|deny)\|"))
     app.add_handler(CommandHandler("napthe", napthe_handler))
-    app.add_handler(CommandHandler("ruttien", enhanced_ruttien_handler))  # Updated
-    app.add_handler(CallbackQueryHandler(enhanced_withdraw_callback))  # Updated
+    app.add_handler(CommandHandler("ruttien", enhanced_ruttien_handler))
+    app.add_handler(CallbackQueryHandler(enhanced_withdraw_callback, pattern=r"^wd_"))
     app.add_handler(CommandHandler("batdau", batdau_handler))
+    
+    # SỬA LỖI: Đảm bảo bet_message_handler đã được định nghĩa
     app.add_handler(MessageHandler(filters.Regex(r"^/([NnLlCcSs]|Le|le).+"), bet_message_handler))
     app.add_handler(MessageHandler(filters.Regex(r"^([NnLlCcSs]|Le|le).+"), bet_message_handler))
+    
     app.add_handler(CommandHandler("addmoney", addmoney_handler))
     app.add_handler(CommandHandler("top10", top10_handler))
     app.add_handler(CommandHandler("balances", balances_handler))
