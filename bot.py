@@ -1133,6 +1133,203 @@ async def napthe_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.exception("Failed to notify admin for deposit")
     await update.message.reply_text("✅ Yêu cầu nạp thẻ đã gửi admin. Vui lòng chờ xử lý.")
 
+# -----------------------
+# Các hàm bị thiếu - THÊM VÀO CUỐI FILE TRƯỚC HÀM main()
+# -----------------------
+
+async def batdau_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Xử lý lệnh /batdau để bắt đầu bot trong nhóm"""
+    chat = update.effective_chat
+    if chat.type not in ("group", "supergroup"):
+        await update.message.reply_text("/batdau chỉ dùng trong nhóm.")
+        return
+        
+    title = chat.title or ""
+    rows = db_query("SELECT chat_id FROM groups WHERE chat_id=?", (chat.id,))
+    if not rows:
+        db_execute(
+            "INSERT INTO groups(chat_id, title, approved, running, bet_mode, forced_outcome, last_round) VALUES (?, ?, 0, 0, 'random', NULL, ?)", 
+            (chat.id, title, 0)
+        )
+    
+    # Tạo keyboard cho admin duyệt
+    kb = InlineKeyboardMarkup([[
+        InlineKeyboardButton("✅ Duyệt", callback_data=f"approve|{chat.id}"), 
+        InlineKeyboardButton("❌ Từ chối", callback_data=f"deny|{chat.id}")
+    ]])
+    
+    text = (
+        f"📋 Yêu cầu bật bot cho nhóm:\n"
+        f"🏷 Tên nhóm: {title}\n"
+        f"🆔 Chat ID: {chat.id}\n"
+        f"👤 Người yêu cầu: {update.effective_user.id}"
+    )
+    
+    # Gửi thông báo cho tất cả admin
+    for aid in ADMIN_IDS:
+        try: 
+            await context.bot.send_message(chat_id=aid, text=text, reply_markup=kb)
+        except Exception: 
+            logger.exception("Cannot notify admin")
+    
+    await update.message.reply_text("✅ Đã gửi yêu cầu tới admin. Vui lòng chờ duyệt.")
+
+async def approve_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Xử lý callback duyệt/từ chối nhóm"""
+    q = update.callback_query
+    await q.answer()
+    parts = (q.data or "").split("|")
+    
+    if len(parts) != 2:
+        await q.edit_message_text("Dữ liệu không hợp lệ.")
+        return
+        
+    action, chat_id_s = parts
+    try: 
+        chat_id = int(chat_id_s)
+    except ValueError:
+        await q.edit_message_text("chat_id không hợp lệ.")
+        return
+        
+    # Kiểm tra quyền admin
+    if q.from_user.id not in ADMIN_IDS:
+        await q.edit_message_text("❌ Chỉ admin mới được thao tác.")
+        return
+        
+    if action == "approve":
+        # Duyệt nhóm
+        db_execute("UPDATE groups SET approved=1, running=1 WHERE chat_id=?", (chat_id,))
+        await q.edit_message_text(f"✅ Đã duyệt và bật chạy cho nhóm {chat_id}.")
+        
+        # Thông báo trong nhóm
+        try: 
+            await context.bot.send_message(
+                chat_id=chat_id, 
+                text=f"🎉 Bot đã được admin duyệt! Bắt đầu chạy phiên lottery mỗi {ROUND_SECONDS}s."
+            )
+        except Exception:
+            logger.warning(f"Không thể gửi thông báo đến nhóm {chat_id}")
+            
+    elif action == "deny":
+        # Từ chối nhóm
+        db_execute("UPDATE groups SET approved=0, running=0 WHERE chat_id=?", (chat_id,))
+        await q.edit_message_text(f"❌ Đã từ chối cho nhóm {chat_id}.")
+
+# -----------------------
+# Hàm rounds_loop bị thiếu - THÊM VÀO ĐÂY
+# -----------------------
+
+async def rounds_loop(app: Application):
+    """Vòng lặp chính để chạy các round lottery"""
+    logger.info("Rounds loop started")
+    await asyncio.sleep(2)  # Chờ bot khởi động hoàn tất
+    
+    while True:
+        try:
+            now_ts = int(datetime.utcnow().timestamp())
+            next_epoch_ts = ((now_ts // ROUND_SECONDS) + 1) * ROUND_SECONDS
+            remaining = next_epoch_ts - now_ts
+            
+            # Gửi countdown nếu còn đủ thời gian
+            if remaining > 30:
+                await asyncio.sleep(remaining - 30)
+                rows = db_query("SELECT chat_id FROM groups WHERE approved=1 AND running=1")
+                for r in rows: 
+                    asyncio.create_task(send_countdown(app.bot, r["chat_id"], 30))
+                
+                await asyncio.sleep(20)
+                rows = db_query("SELECT chat_id FROM groups WHERE approved=1 AND running=1")
+                for r in rows: 
+                    asyncio.create_task(send_countdown(app.bot, r["chat_id"], 10))
+                
+                await asyncio.sleep(5)
+                rows = db_query("SELECT chat_id FROM groups WHERE approved=1 AND running=1")
+                for r in rows: 
+                    asyncio.create_task(send_countdown(app.bot, r["chat_id"], 5))
+                
+                await asyncio.sleep(5)
+            else:
+                # Xử lý khi thời gian còn ít
+                if remaining > 10:
+                    await asyncio.sleep(remaining - 10)
+                    rows = db_query("SELECT chat_id FROM groups WHERE approved=1 AND running=1")
+                    for r in rows: 
+                        asyncio.create_task(send_countdown(app.bot, r["chat_id"], 10))
+                    await asyncio.sleep(5)
+                    rows = db_query("SELECT chat_id FROM groups WHERE approved=1 AND running=1")
+                    for r in rows: 
+                        asyncio.create_task(send_countdown(app.bot, r["chat_id"], 5))
+                    await asyncio.sleep(5)
+                elif remaining > 5:
+                    await asyncio.sleep(remaining - 5)
+                    rows = db_query("SELECT chat_id FROM groups WHERE approved=1 AND running=1")
+                    for r in rows: 
+                        asyncio.create_task(send_countdown(app.bot, r["chat_id"], 5))
+                    await asyncio.sleep(5)
+                else:
+                    # Dưới 5 giây, gửi countdown ngay lập tức
+                    rows = db_query("SELECT chat_id FROM groups WHERE approved=1 AND running=1")
+                    for r in rows: 
+                        asyncio.create_task(send_countdown(app.bot, r["chat_id"], 5))
+                    await asyncio.sleep(remaining)
+
+            # Chạy round cho tất cả nhóm được duyệt
+            round_epoch = int(datetime.utcnow().timestamp()) // ROUND_SECONDS
+            rows = db_query("SELECT chat_id FROM groups WHERE approved=1 AND running=1")
+            tasks = []
+            for r in rows:
+                tasks.append(asyncio.create_task(run_round_for_group(app, r["chat_id"], round_epoch)))
+            
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
+                
+        except Exception as e:
+            logger.exception(f"Exception in rounds_loop: {e}")
+            await asyncio.sleep(1)  # Chờ 1 giây nếu có lỗi
+
+# -----------------------
+# Hàm send_countdown bị thiếu - THÊM VÀO ĐÂY
+# -----------------------
+
+async def send_countdown(bot, chat_id: int, seconds: int):
+    """Gửi thông báo countdown"""
+    try:
+        if seconds == 30:
+            await bot.send_message(chat_id=chat_id, text="⏰ Còn 30 giây trước khi quay kết quả — nhanh tay cược!")
+        elif seconds == 10:
+            await bot.send_message(chat_id=chat_id, text="⚠️ Còn 10 giây! Sắp khóa cược.")
+        elif seconds == 5:
+            await bot.send_message(chat_id=chat_id, text="🔒 Còn 5 giây — Chat bị khóa để chốt cược.")
+            await lock_group_chat(bot, chat_id)
+    except Exception as e:
+        logger.warning(f"Không thể gửi countdown đến {chat_id}: {e}")
+
+# -----------------------
+# Hàm lock/unlock chat bị thiếu - THÊM VÀO ĐÂY
+# -----------------------
+
+async def lock_group_chat(bot, chat_id: int):
+    """Khóa chat không cho gửi tin nhắn"""
+    try:
+        perms = ChatPermissions(can_send_messages=False)
+        await bot.set_chat_permissions(chat_id=chat_id, permissions=perms)
+    except Exception as e:
+        logger.warning(f"Không thể khóa chat {chat_id}: {e}")
+
+async def unlock_group_chat(bot, chat_id: int):
+    """Mở khóa chat"""
+    try:
+        perms = ChatPermissions(
+            can_send_messages=True, 
+            can_send_media_messages=True, 
+            can_send_polls=True, 
+            can_send_other_messages=True, 
+            can_add_web_page_previews=True
+        )
+        await bot.set_chat_permissions(chat_id=chat_id, permissions=perms)
+    except Exception as e:
+        logger.warning(f"Không thể mở khóa chat {chat_id}: {e}")
+
 # [Keep all other existing functions exactly as they were...]
 
 # -----------------------
